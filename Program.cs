@@ -54,30 +54,47 @@ app.MapGet("/health", () => new { status = "ok", mode = azureMode ? "azure" : "d
    .WithTags("Status").Produces<object>(200);
 
 // ── POST /invoices ───────────────────────────────────────────────
-app.MapPost("/invoices", async (IFormFile file) =>
+app.MapPost("/invoices", async (IFormFile file, ILogger<Program> logger) =>
 {
     var id = Guid.NewGuid().ToString("N")[..8];
     FakturaResultat r;
 
-    if (!azureMode || diClient is null)
+    if (!azureMode || diClient is null) 
     {
         r = new(id, "Demo Leverantör AB", 12500m,
             DateTime.UtcNow.AddDays(30).ToString("yyyy-MM-dd"), "SEK", "klar (demo-läge)");
     }
     else
     {
-        using var stream = file.OpenReadStream();
-        var op  = await diClient.AnalyzeDocumentAsync(WaitUntil.Completed, "prebuilt-invoice", stream);
-        var doc = op.Value.Documents.FirstOrDefault();
-        r = ParseFaktura(doc, id);
-        await blobs!.UploadBlobAsync($"{id}.json", new BinaryData(JsonSerializer.Serialize(r)));
+        try
+        {
+            using var stream = file.OpenReadStream();
+            var op  = await diClient.AnalyzeDocumentAsync(WaitUntil.Completed, "prebuilt-invoice", stream);
+            var doc = op.Value.Documents.FirstOrDefault();
+            r = ParseFaktura(doc, id);
+            await blobs!.UploadBlobAsync($"{id}.json", new BinaryData(JsonSerializer.Serialize(r)));
+        }
+        catch (RequestFailedException ex)
+        {
+            logger.LogError(ex, "Document Intelligence-anrop misslyckades för faktura {Id}", id);
+            return Results.Problem(
+                detail: "Kunde inte analysera fakturan (Document Intelligence-fel).",
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Oväntat fel vid fakturaanalys för {Id}", id);
+            return Results.Problem(
+                detail: "Ett oväntat fel uppstod vid analys av fakturan.",
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
     }
 
     fakturor[id] = r;
     return Results.Created($"/invoices/{id}", new { id, r.Status });
 })
 .WithTags("Fakturor").WithSummary("Ladda upp faktura (PDF/bild) för Document Intelligence-analys")
-.Produces<object>(201).Produces(400).DisableAntiforgery();
+.Produces<object>(201).Produces(400).Produces(502).Produces(500).DisableAntiforgery();
 
 // ── GET /invoices/{id} ───────────────────────────────────────────
 app.MapGet("/invoices/{id}", async (string id) =>
