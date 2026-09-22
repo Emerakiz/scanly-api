@@ -54,11 +54,8 @@ app.MapGet("/health", () => new { status = "ok", mode = azureMode ? "azure" : "d
    .WithTags("Status").Produces<object>(200);
 
 // ── POST /invoices ───────────────────────────────────────────────
-app.MapPost("/invoices", async (HttpRequest req) =>
+app.MapPost("/invoices", async (IFormFile file) =>
 {
-    if (!req.HasFormContentType || req.Form.Files.Count == 0)
-        return Results.BadRequest(new { fel = "Skicka filen som multipart/form-data (fält: file)" });
-
     var id = Guid.NewGuid().ToString("N")[..8];
     FakturaResultat r;
 
@@ -69,7 +66,7 @@ app.MapPost("/invoices", async (HttpRequest req) =>
     }
     else
     {
-        using var stream = req.Form.Files[0].OpenReadStream();
+        using var stream = file.OpenReadStream();
         var op  = await diClient.AnalyzeDocumentAsync(WaitUntil.Completed, "prebuilt-invoice", stream);
         var doc = op.Value.Documents.FirstOrDefault();
         r = ParseFaktura(doc, id);
