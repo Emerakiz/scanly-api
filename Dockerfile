@@ -10,4 +10,6 @@ WORKDIR /app
 COPY --from=build /app/publish .
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
+ARG APP_VERSION=local
+ENV APP_VERSION=$APP_VERSION
 ENTRYPOINT ["dotnet", "ScanlyApi.dll"]

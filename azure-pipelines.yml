@@ -3,6 +3,12 @@ trigger:
     include:
       - main
 
+parameters:
+  - name: rollbackTag
+    displayName: "Rollback: image tag (BuildId) to go back to. Leave 'none' for a normal deploy"
+    type: string
+    default: "none"
+
 variables:
   acrServiceConnection: "ACR-ServiceConnection"
   azureServiceConnection: "Azure-ServiceConnection"
@@ -12,54 +18,75 @@ variables:
   resourceGroup: "RG-Embla-Felicia-Johansson-f438a1-DotNetCloudDeveloper-VT-Mars-Goteborg"
 
 stages:
-  - stage: BuildAndTest
-    displayName: "Build & Test"
-    jobs:
-      - job: Build
-        pool:
-          vmImage: "ubuntu-latest"
-        steps:
-          - task: UseDotNet@2
-            inputs:
-              packageType: "sdk"
-              version: "8.x"
-            displayName: "Install .NET 8 SDK"
+  - ${{ if eq(parameters.rollbackTag, 'none') }}:
+      - stage: BuildAndTest
+        displayName: "Build & Test"
+        jobs:
+          - job: Build
+            pool:
+              vmImage: "ubuntu-latest"
+            steps:
+              - task: UseDotNet@2
+                inputs:
+                  packageType: "sdk"
+                  version: "8.x"
+                displayName: "Install .NET 8 SDK"
 
-          - script: dotnet restore
-            displayName: "Restore dependencies"
+              - script: dotnet restore
+                displayName: "Restore dependencies"
 
-          - script: dotnet build --configuration Release --no-restore
-            displayName: "Build"
+              - script: dotnet build --configuration Release --no-restore
+                displayName: "Build"
 
-  - stage: DockerBuildPush
-    displayName: "Build & Push Docker image"
-    dependsOn: BuildAndTest
-    jobs:
-      - job: DockerBuildPush
-        pool:
-          vmImage: "ubuntu-latest"
-        steps:
-          - task: Docker@2
-            displayName: "Build and push image to ACR"
-            inputs:
-              containerRegistry: "$(acrServiceConnection)"
-              repository: "$(imageRepository)"
-              command: "buildAndPush"
-              Dockerfile: "**/Dockerfile"
-              tags: |
-                $(Build.BuildId)
-                latest
+      - stage: DockerBuildPush
+        displayName: "Build & Push Docker image"
+        dependsOn: BuildAndTest
+        jobs:
+          - job: DockerBuildPush
+            pool:
+              vmImage: "ubuntu-latest"
+            steps:
+              - task: Docker@2
+                displayName: "Build image"
+                inputs:
+                  containerRegistry: "$(acrServiceConnection)"
+                  repository: "$(imageRepository)"
+                  command: "build"
+                  Dockerfile: "**/Dockerfile"
+                  arguments: "--build-arg APP_VERSION=$(Build.BuildId)"
+                  tags: |
+                    $(Build.BuildId)
+                    latest
+
+              - task: Docker@2
+                displayName: "Push image to ACR"
+                inputs:
+                  containerRegistry: "$(acrServiceConnection)"
+                  repository: "$(imageRepository)"
+                  command: "push"
+                  tags: |
+                    $(Build.BuildId)
+                    latest
 
   - stage: Deploy
-    displayName: "Deploy to Azure Container Apps"
-    dependsOn: DockerBuildPush
+    ${{ if eq(parameters.rollbackTag, 'none') }}:
+      displayName: "Deploy to Azure Container Apps"
+      dependsOn: DockerBuildPush
+    ${{ else }}:
+      displayName: "ROLLBACK to image ${{ parameters.rollbackTag }}"
+      dependsOn: []
+    variables:
+      ${{ if eq(parameters.rollbackTag, 'none') }}:
+        imageTag: $(Build.BuildId)
+      ${{ else }}:
+        imageTag: ${{ parameters.rollbackTag }}
     jobs:
       - job: Deploy
         pool:
           vmImage: "ubuntu-latest"
         steps:
           - task: AzureCLI@2
-            displayName: "Update Container App image"
+            displayName: "Update Container App (image + autoscaling)"
             inputs:
               azureSubscription: "$(azureServiceConnection)"
               scriptType: "bash"
@@ -68,4 +95,21 @@ stages:
                 az containerapp update \
                   --name $(containerAppName) \
                   --resource-group $(resourceGroup) \
-                  --image $(acrLoginServer)/$(imageRepository):$(Build.BuildId)
+                  --image $(acrLoginServer)/$(imageRepository):$(imageTag) \
+                  --min-replicas 2 \
+                  --max-replicas 5 \
+                  --scale-rule-name http-rule \
+                  --scale-rule-type http \
+                  --scale-rule-http-concurrency 10
+
+          - task: AzureCLI@2
+            displayName: "Show scale config and revisions (verification)"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                az containerapp show --name $(containerAppName) --resource-group $(resourceGroup) \
+                  --query "properties.template.scale" -o json
+                az containerapp revision list --name $(containerAppName) --resource-group $(resourceGroup) \
+                  --query "[].{revision:name, active:properties.active, image:properties.template.containers[0].image, created:properties.createdTime}" -o table

@@ -3,7 +3,15 @@ param projectName string = 'scanlyed'
 param diEndpoint string = 'https://cloud25ai-di-4d98c.cognitiveservices.azure.com/'
 @secure()
 param diKey string
-param alertEmail string
+// Action Groups and Scheduled Query Rules are blocked by the class Azure Policy (RequestDisallowedByPolicy).
+// The code stays as design documentation but is only deployed if enableAlerts=true.
+param enableAlerts bool = false
+param alertEmail string = ''
+
+// Autoscaling: at least 2 replicas (G requirement), scales out to maxReplicas when concurrent requests per replica exceed httpConcurrency
+param minReplicas int = 2
+param maxReplicas int = 5
+param httpConcurrency int = 10
 
 
 // Create an Azure Container Registry (ACR) for storing container images
@@ -108,8 +116,18 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         }
       ]
       scale: {
-        minReplicas: 2
-        maxReplicas: 3
+        minReplicas: minReplicas
+        maxReplicas: maxReplicas
+        rules: [
+          {
+            name: 'http-rule'
+            http: {
+              metadata: {
+                concurrentRequests: string(httpConcurrency)
+              }
+            }
+          }
+        ]
       }
     }
   }
@@ -153,7 +171,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (enableAlerts) {
   name: '${projectName}-alerts-ag'
   location: 'global'
   properties: {
@@ -169,7 +187,7 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   }
 }
 
-resource errorAlertRule 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
+resource errorAlertRule 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = if (enableAlerts) {
   name: '${projectName}-di-error-alert'
   location: location
   properties: {

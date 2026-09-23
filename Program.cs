@@ -50,7 +50,10 @@ if (azureMode)
 var fakturor = new Dictionary<string, FakturaResultat>();
 
 // ── GET /health ──────────────────────────────────────────────────
-app.MapGet("/health", () => new { status = "ok", mode = azureMode ? "azure" : "demo" })
+// version = BuildId of the image (set via Dockerfile from the pipeline) → shows which version is running, e.g. after rollback
+// replica = container hostname → shows which replica answered, e.g. during the autoscaling test
+var appVersion = Environment.GetEnvironmentVariable("APP_VERSION") ?? "local";
+app.MapGet("/health", () => new { status = "ok", mode = azureMode ? "azure" : "demo", version = appVersion, replica = Environment.MachineName })
    .WithTags("Status").Produces<object>(200);
 
 // ── POST /invoices ───────────────────────────────────────────────
