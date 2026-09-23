@@ -1,0 +1,71 @@
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  acrServiceConnection: "ACR-ServiceConnection"
+  azureServiceConnection: "Azure-ServiceConnection"
+  imageRepository: "scanlyapi"
+  acrLoginServer: "scanlyedacr.azurecr.io"
+  containerAppName: "scanlyed-app"
+  resourceGroup: "RG-Embla-Felicia-Johansson-f438a1-DotNetCloudDeveloper-VT-Mars-Goteborg"
+
+stages:
+  - stage: BuildAndTest
+    displayName: "Build & Test"
+    jobs:
+      - job: Build
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              packageType: "sdk"
+              version: "8.x"
+            displayName: "Install .NET 8 SDK"
+
+          - script: dotnet restore
+            displayName: "Restore dependencies"
+
+          - script: dotnet build --configuration Release --no-restore
+            displayName: "Build"
+
+  - stage: DockerBuildPush
+    displayName: "Build & Push Docker image"
+    dependsOn: BuildAndTest
+    jobs:
+      - job: DockerBuildPush
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: Docker@2
+            displayName: "Build and push image to ACR"
+            inputs:
+              containerRegistry: "$(acrServiceConnection)"
+              repository: "$(imageRepository)"
+              command: "buildAndPush"
+              Dockerfile: "**/Dockerfile"
+              tags: |
+                $(Build.BuildId)
+                latest
+
+  - stage: Deploy
+    displayName: "Deploy to Azure Container Apps"
+    dependsOn: DockerBuildPush
+    jobs:
+      - job: Deploy
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Update Container App image"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                az containerapp update \
+                  --name $(containerAppName) \
+                  --resource-group $(resourceGroup) \
+                  --image $(acrLoginServer)/$(imageRepository):$(Build.BuildId)
