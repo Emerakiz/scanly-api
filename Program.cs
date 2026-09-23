@@ -126,10 +126,25 @@ app.Run();
 static FakturaResultat ParseFaktura(AnalyzedDocument? doc, string id)
 {
     if (doc is null) return new(id, "Okänd", 0m, "", "SEK", "fel: tomt svar");
-    string  Get(string k)    => doc.Fields.TryGetValue(k, out var f) ? f.Content ?? "" : "";
-    decimal GetDec(string k) => doc.Fields.TryGetValue(k, out var f) &&
-                                 f.Value?.AsDouble() is double d ? (decimal)d : 0m;
-    return new(id, Get("VendorName"), GetDec("InvoiceTotal"), Get("DueDate"), "SEK", "klar");
+    string Get(string k) => doc.Fields.TryGetValue(k, out var f) ? f.Content ?? "" : "";
+    decimal GetDec(string k)
+    {
+        if (!doc.Fields.TryGetValue(k, out var f) || f.Value is null) return 0m;
+        return f.FieldType switch
+        {
+            DocumentFieldType.Currency => (decimal)f.Value.AsCurrency().Amount,
+            DocumentFieldType.Double   => (decimal)f.Value.AsDouble(),
+            _ => 0m
+        };
+    }
+    string GetCurrency(string k)
+    {
+        if (!doc.Fields.TryGetValue(k, out var f) || f.Value is null || f.FieldType != DocumentFieldType.Currency)
+            return "SEK";
+        var c = f.Value.AsCurrency();
+        return c.Code ?? c.Symbol ?? "SEK";
+    }
+    return new(id, Get("VendorName"), GetDec("InvoiceTotal"), Get("DueDate"), GetCurrency("InvoiceTotal"), "klar");
 }
 
 // ── Modeller ─────────────────────────────────────────────────────
