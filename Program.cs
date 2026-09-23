@@ -153,6 +153,3 @@ static FakturaResultat ParseFaktura(AnalyzedDocument? doc, string id)
 // ── Modeller ─────────────────────────────────────────────────────
 record FakturaResultat(string Id, string Leverantor, decimal Totalbelopp,
     string Forfallodatum, string Valuta, string Status);
-
-
-//this is a comment to see if rollback works
