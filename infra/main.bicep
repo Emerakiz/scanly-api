@@ -3,6 +3,7 @@ param projectName string = 'scanlyed'
 param diEndpoint string = 'https://cloud25ai-di-4d98c.cognitiveservices.azure.com/'
 @secure()
 param diKey string
+param alertEmail string
 
 
 // Create an Azure Container Registry (ACR) for storing container images
@@ -99,6 +100,10 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'AZURE_STORAGE_URL'
               value: storage.properties.primaryEndpoints.blob
             }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
           ]
         }
       ]
@@ -136,5 +141,59 @@ resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
     )
     principalId: containerApp.identity.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: '${projectName}-insights'
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+  }
+}
+
+resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+  name: '${projectName}-alerts-ag'
+  location: 'global'
+  properties: {
+    groupShortName: 'scanlyAG'
+    enabled: true
+    emailReceivers: [
+      {
+        name: 'TeamEmail'
+        emailAddress: alertEmail
+        useCommonAlertSchema: true
+      }
+    ]
+  }
+}
+
+resource errorAlertRule 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
+  name: '${projectName}-di-error-alert'
+  location: location
+  properties: {
+    severity: 2
+    enabled: true
+    scopes: [
+      logAnalytics.id
+    ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          query: 'ContainerAppConsoleLogs_CL | where ContainerAppName_s == \'${projectName}-app\' | where Log_s contains "fail: Program"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [
+        actionGroup.id
+      ]
+    }
   }
 }
